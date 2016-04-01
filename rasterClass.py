@@ -8,7 +8,7 @@ Description:
 
 Dependencies: 
          Public:     datetime, gdal, gdalnumeric, numpy, osr, re, sys, __future__
-         Private:    Py_utils, gdal_defs
+         Private:    Py_utils
 		    Raster_tools requires scikit-learn (install with 'pip install -U scikit-learn')
    
 Created by: Jordan Muss
@@ -47,20 +47,36 @@ Updated:       12-20-2012   Added a clip method so that a raster can be clipped
 			          using the new 'ReprojectClass'.
                 9-15-2015   Added: 'GetSingleNoData' method to RasterClass to
 		                 return a single no_data for the entire raster.
-				 def proximity(rast):
                 3-27-2016   Added: 'proximity' function, which calculates a
 		                 proximity matrix for a raster or band using
 				 GDAL's ComputeProximity method. Distances are
 				 in number of pixels. Multiply by pixel size to
 				 get a real distance ***This could be folded
 				 into RasterClass as method ***
+                4-01-2016   Deleted: 'read_and_clip_raster' function, because
+		                 it's functionality is accomplished using class
+				 'clipClass'.
+			     Deleted: 'clip_and_rescale_raster' method in class
+			         'Raster_hdf'. It was redundant.
+			     Updated: 'clip' & 'clip_raster' methods in 'RasterClass'
+			         to utilize clip_class (removed redundant code).
+			     Updated: 'clip_raster' method in 'Raster_hdf' to
+			         utilize clip_class (removed redundant code).
+			     Updated: 'clipClass' to return True/False on success/failure,
+			         and added 'get_clipped_raster' method to return
+				 the clipped raster as a numpy structure. Now allow a file
+				 name to be passed for the raster that will be clipped.
 
+ToDo:
+      1) replace calls to 'read_and_clip_raster' & 'clip_and_rescale_raster' in
+             other scripts with calls to 'clipClass' or 'Raster_hdf'
+      2) Combine/reconcile 'Reproject_Class' & 'clipClass' & calls by the 'Repreject'
+             method in 'RasterClass'
 """
 from __future__ import print_function
 import sys
 import datetime, re
 import numpy as np
-from gdal_defs import *
 from PIL import Image, ImageDraw
 from Raster_tools import mask_type
 try:
@@ -68,8 +84,81 @@ try:
 except:
     import gdal, gdalnumeric, osr
 
-gdal.AllRegister()
 gdal.UseExceptions()
+
+# Create numpy/gdal type mapping table:
+if gdal.__version__[:gdal.__version__.rfind('.')] == "1.9":
+    transforms = { 'NearestNeighbor'  : gdal.GRA_NearestNeighbour,
+               'near'             : gdal.GRA_NearestNeighbour,
+               'NN'               : gdal.GRA_NearestNeighbour,
+               'bilinear'         : gdal.GRA_Bilinear,
+               'BL'               : gdal.GRA_Bilinear,
+               'cubic'            : gdal.GRA_Cubic,
+               'C'                : gdal.GRA_Cubic,
+               'cubicspline'      : gdal.GRA_CubicSpline,
+               'CS'               : gdal.GRA_CubicSpline,
+               'L'                : gdal.GRA_Lanczos,
+               'lanczos'          : gdal.GRA_Lanczos}
+else:
+    transforms = { 'NearestNeighbor'  : gdal.GRA_NearestNeighbour,
+               'near'             : gdal.GRA_NearestNeighbour,
+               'NN'               : gdal.GRA_NearestNeighbour,
+               'bilinear'         : gdal.GRA_Bilinear,
+               'BL'               : gdal.GRA_Bilinear,
+               'cubic'            : gdal.GRA_Cubic,
+               'C'                : gdal.GRA_Cubic,
+               'cubicspline'      : gdal.GRA_CubicSpline,
+               'CS'               : gdal.GRA_CubicSpline,
+               'L'                : gdal.GRA_Lanczos,
+               'lanczos'          : gdal.GRA_Lanczos,
+               'average'          : gdal.GRA_Average,
+               'avg'              : gdal.GRA_Average,
+               'mode'             : gdal.GRA_Mode,
+               'M'                : gdal.GRA_Mode}
+# also check 'average' and 'mode' resampling
+
+gdalDataTypes = { 'Unknown'  : gdal.GDT_Unknown,
+                  'Byte'    : gdal.GDT_Byte,
+                  'byte'    : gdal.GDT_Byte,
+                  'Int8'    : gdal.GDT_Byte,
+                  'int8'    : gdal.GDT_Byte,
+                  'UInt16'   : gdal.GDT_UInt16,
+                  'uint16'   : gdal.GDT_UInt16,
+                  'Int16'    : gdal.GDT_Int16,
+                  'int16'    : gdal.GDT_Int16,
+                  'UInt32'   : gdal.GDT_UInt32,
+                  'uint32'   : gdal.GDT_UInt32,
+                  'Int32'    : gdal.GDT_Int32,
+                  'int32'    : gdal.GDT_Int32,
+                  'Float32'  : gdal.GDT_Float32,
+                  'float32'  : gdal.GDT_Float32,
+                  'Float64'  : gdal.GDT_Float64,
+                  'float64'  : gdal.GDT_Float64,
+                  'CInt16'   : gdal.GDT_CInt16,
+                  'cint16'   : gdal.GDT_CInt16,
+                  'CInt32'   : gdal.GDT_CInt32,
+                  'cint32'   : gdal.GDT_CInt32,
+                  'CFloat32' : gdal.GDT_CFloat32,
+                  'cfloat32' : gdal.GDT_CFloat32,
+                  'CFloat64' : gdal.GDT_CFloat64,
+                  'cfloat64' : gdal.GDT_CFloat64}
+  
+gdalNumpyTypes = {'Unknown'  : 'uint8',
+                  'Byte'     : 'int8',
+                  'UInt16'   : 'uint16',
+                  'Int16'    : 'int16',
+                  'UInt32'   : 'uint32',
+                  'Int32'    : 'int32',
+                  'Float32'  : 'float32',
+                  'Float64'  : 'float64',
+                  'CInt16'   : np.dtype('int8, int8'),
+                  'CInt32'   : np.dtype('int16, int16'),
+                  'CFloat32' : 'complex',
+                  'CFloat64' : 'complex'}
+
+aggFunc = {'mean': 'np.mean',
+           'max' : 'np.max',
+           'min' : 'np.min'}
 
 def transformPoint(pt, from_cs, to_cs):
     sourceSR = osr.SpatialReference(wkt=from_cs)
@@ -88,23 +177,7 @@ def fill_band(source_band, f_band, source_mask, fill_mask):
 def GetEnd(sizeOffset):
     return (sizeOffset['size'] - sizeOffset['offset'])
 
-def read_and_clip_raster(hdf_raster, band_num, clip_raster):
-    ''' Open, reproject, and clip a raster using a template raster: '''
-    band = RasterClass(hdf_raster.bands[band_num][0], gdal.GA_ReadOnly)
-    res = gdal.ReprojectImage( band.raster, clip_raster.dest, band.projection, \
-                                     clip_raster.projection, transforms['NN'] )
-    band.close()
-    if (res == 0):
-        clipped_band = clip_raster.dest.ReadAsArray()
-    else:
-	m = re.search(r'(?<=band)\d+', hdf_raster.bands[band_num][1], flags=re.IGNORECASE)
-	if m:
-	    band = m.group()
-	else:
-	    band = hdf_raster.bands[band_num][1].split(' ')[1]
-        print("Error reprojecting Band %s" % band)
-        sys.exit(2)
-    return clipped_band
+''' Deprecated: def read_and_clip_raster(hdf_raster, band_num, clip_raster) '''
 
 def write_raster(raster_bands, dest_geotransform, dest_projection, outRast, no_data=-9999, rasterFormat='GTiff'): 
     '''Create and write to a new multi-band raster. '''
@@ -169,57 +242,58 @@ class RasterClass:
     def __init__(self, file_name, access=gdal.GA_ReadOnly, noDataVal=np.NaN):
         try:
             self.raster = gdal.Open( file_name, access )
-        except RuntimeError:
+	    self.rasterPath = file_name
+	    self.isRaster = True
+	    self.driver = self.raster.GetDriver().ShortName
+	    self.numBands = self.raster.RasterCount
+	    self.cols = self.raster.RasterXSize
+	    self.rows = self.raster.RasterYSize
+	    self.band_type = self.raster.GetRasterBand(1).DataType
+	    self.dataType = gdal.GetDataTypeName(self.band_type)
+	    self.projection = self.raster.GetProjection()
+	    srs = osr.SpatialReference()
+	    srs.ImportFromWkt(self.projection)
+	    srs.AutoIdentifyEPSG()
+	    self.EPSG = srs.GetAuthorityCode(None)
+	    if self.EPSG is not None : self.EPSG = int(self.EPSG)
+	    self.geotransform = self.raster.GetGeoTransform()
+	    self.pixelSize = self.geotransform[1]
+	    self.AltPixelSize = self.geotransform[5]
+	    self.ulX = self.geotransform[0]
+	    self.ulY = self.geotransform[3]
+	    self.lrX = self.calc_lrX()
+	    self.lrY = self.calc_lrY()
+	    self.MD = self.raster.GetMetadata()
+	    self.bands = {}
+	    for band in self.MD:
+		if band.partition('_')[2].isdigit():
+		    self.bands[self.MD[band].partition('(')[2].partition(':')[0]] = \
+			int(band.partition('_')[2])
+    
+	    self.NoData = []
+	    for band_num in range(1, self.numBands+1):
+		b = self.raster.GetRasterBand(band_num)
+		bNoData = b.GetNoDataValue()
+		if (bNoData is None) | (bNoData is np.nan):
+		    self.NoData.append(noDataVal)
+		else:
+		    self.NoData.append(bNoData)
+		b = None
+	    if len(self.NoData) > 0:
+		self.nodata_value = self.NoData[0]
+	    else:
+		self.nodata_value = None
+	    CT = self.raster.GetRasterBand(1).GetRasterColorTable()
+	    if CT is not None:
+		self.CT = CT.Clone()
+	    else:
+		self.CT = None
+        except:
             self.EmptyInfoFile()
             self.isRaster = False
-	    print("WARNING: %s either does not exist or is not a raster" % file_name)
+	    print(("WARNING: either %s does not exist or there was a problem " \
+	          + "opening/reading the raster.") % file_name)
             return
-        self.rasterPath = file_name
-        self.isRaster = True
-        self.driver = self.raster.GetDriver().ShortName
-        self.numBands = self.raster.RasterCount
-        self.cols = self.raster.RasterXSize
-        self.rows = self.raster.RasterYSize
-        self.band_type = self.raster.GetRasterBand(1).DataType
-        self.dataType = gdal.GetDataTypeName(self.band_type)
-        self.projection = self.raster.GetProjection()
-	srs = osr.SpatialReference()
-	srs.ImportFromWkt(self.projection)
-	srs.AutoIdentifyEPSG()
-	self.EPSG = srs.GetAuthorityCode(None)
-	if self.EPSG is not None : self.EPSG = int(self.EPSG)
-        self.geotransform = self.raster.GetGeoTransform()
-        self.pixelSize = self.geotransform[1]
-        self.AltPixelSize = self.geotransform[5]
-        self.ulX = self.geotransform[0]
-        self.ulY = self.geotransform[3]
-        self.lrX = self.calc_lrX()
-        self.lrY = self.calc_lrY()
-        self.MD = self.raster.GetMetadata()
-        self.bands = {}
-        for band in self.MD:
-            if band.partition('_')[2].isdigit():
-                self.bands[self.MD[band].partition('(')[2].partition(':')[0]] = \
-                    int(band.partition('_')[2])
-
-	self.NoData = []
-	for band_num in range(1, self.numBands+1):
-	    b = self.raster.GetRasterBand(band_num)
-	    bNoData = b.GetNoDataValue()
-	    if (bNoData is None) | (bNoData is np.nan):
-		self.NoData.append(noDataVal)
-	    else:
-		self.NoData.append(bNoData)
-	    b = None
-	if len(self.NoData) > 0:
-	    self.nodata_value = self.NoData[0]
-	else:
-	    self.nodata_value = None
-        CT = self.raster.GetRasterBand(1).GetRasterColorTable()
-        if CT is not None:
-            self.CT = CT.Clone()
-        else:
-            self.CT = None
     def EmptyInfoFile(self):
         self.raster = None
         self.isRaster = True
@@ -260,43 +334,55 @@ class RasterClass:
 	if type(clipper) is type(()):
 	    ''' A tuple of (ulX, lrX, lrY, ulY) format was passed'''
 	    intersect = self.GetShapeIntersect(clipper)
+	    if intersect != None:
+		clipULoffset = {'x':int(np.floor((intersect['ulX'] - origin['x']) / pixel['width'])),
+		                'y':int(np.floor((intersect['ulY'] - origin['y']) / pixel['height']))}
+		clipLRoffset = {'x':int(np.floor((intersect['lrX'] - origin['x']) / pixel['width'])),
+		               'y':int(np.floor((intersect['lrY'] - origin['y']) / pixel['height']))}
+	    new_geotransform = (intersect['ulX'], self.geotransform[1], self.geotransform[2], \
+		                intersect['ulY'], self.geotransform[4], self.geotransform[5])
+	    new_height = clipLRoffset['y'] - clipULoffset['y'] + 1
+	    new_width = clipLRoffset['x'] - clipULoffset['x'] + 1
+	    clipped_rast = np.full(shape=(self.numBands, new_height, new_width), \
+		            fill_value=self.nodata_value, dtype=gdalNumpyTypes[self.dataType])
+	    
+	    xStart = clipULoffset['x'] + 1
+	    yStart = clipULoffset['y'] + 1
+	    ''' Get each band, clip it, and load it into the out raster: '''
+	    for band in range(self.numBands):
+		srcBand = self.read_band(band+1)
+		clipped_rast[band] = srcBand[clipULoffset['y']:(clipLRoffset['y']+1), \
+		                        clipULoffset['x']:(clipLRoffset['x']+1)]
 	else:
-	    ''' Assume it was an instance of RasterClass'''
-	    intersect = self.GetIntersect(clipRaster)
-	if intersect != None:
-	    clipULoffset = {'x':int(np.floor((intersect['ulX'] - origin['x']) / pixel['width'])),
-	                    'y':int(np.floor((intersect['ulY'] - origin['y']) / pixel['height']))}
-	    clipLRoffset = {'x':int(np.floor((intersect['lrX'] - origin['x']) / pixel['width'])),
-		           'y':int(np.floor((intersect['lrY'] - origin['y']) / pixel['height']))}
-        new_geotransform = (intersect['ulX'], self.geotransform[1], self.geotransform[2], \
-	                    intersect['ulY'], self.geotransform[4], self.geotransform[5])
-        new_height = clipLRoffset['y'] - clipULoffset['y'] + 1
-        new_width = clipLRoffset['x'] - clipULoffset['x'] + 1
-	clipped_rast = np.full(shape=(self.numBands, new_height, new_width), \
-	                fill_value=self.nodata_value, dtype=gdalNumpyTypes[self.dataType])
-        
-        xStart = clipULoffset['x'] + 1
-        yStart = clipULoffset['y'] + 1
-	''' Get each band, clip it, and load it into the out raster: '''
-	for band in range(self.numBands):
-	    srcBand = self.read_band(band+1)
-	    clipped_rast[band] = srcBand[clipULoffset['y']:(clipLRoffset['y']+1), \
-	                            clipULoffset['x']:(clipLRoffset['x']+1)]
-	if outRasterName is None:
-	    return {'cols':new_width, 'rows':new_height, 'xStart':xStart, 'yStart':yStart, 'rast':clipped_rast}
-	else:
-	    write_raster(clipped_rast, new_geotransform, self.projection, outRasterName, no_data=self.nodata_value, rasterFormat=self.driver)
-	    return {'cols':new_width, 'rows':new_height, 'xStart':xStart, 'yStart':yStart}
+	    if isinstance(clipper, str) and os.path.isfile(clipper):
+		clipper = RasterClass(clipper)
+	    if isinstance(clipper, RasterClass):
+		'''clipper is an instance of RasterClass'''
+		clipped_rast = self.clip_raster(clipper)
+		xStart = clipper.ulX
+		yStart = clipper.ulY
+	    else:
+		print("Warning (RasterClass.clip): the clipper provided was not valid (%s)" % self.rasterPath)
+		return None
+	    if clipped_rast is not None:
+		if outRasterName is not None:
+		    if len(clipped_rast.shape) == 2 : clipped_rast = [clipped_rast]
+		    write_raster(clipped_rast, new_geotransform, self.projection, \
+			         outRasterName, no_data=self.nodata_value, \
+		                 rasterFormat=self.driver)
+		return {'xStart':xStart, 'yStart':yStart, 'rast':clipped_rast}
+	    else:
+		return None
     def clip_raster(self, clip_rast, trans='NN'):
 	''' Reproject, and clip a raster using a template raster: '''
 	clipRaster = clipClass(clip_rast, self.pixelSize, num_bands=self.numBands, rast_type=self.dataType)
-	res = gdal.ReprojectImage( self.raster, clipRaster.dest, self.projection, \
-	                                 clipRaster.projection, transforms[trans] )
-	if (res != 0):
-	    print("Error reprojecting raster %s" % self.rasterPath)
-	    sys.exit(2)
+	clip = clipRaster.clip_raster(self.raster, trans=trans)
+	if not clip:
+	    ''' There was an error clipping/reprojecting the raster. The error
+	        message was printed in 'clipcClass':'''
+	    return None
 	else:
-	    return clipRaster.dest
+	    return clip.get_clipped_raster()
     def read_band(self, band_num):
 	return self.raster.GetRasterBand(band_num).ReadAsArray()
     def read_all_bands(self):
@@ -417,46 +503,28 @@ class Raster_hdf:
 	    self.doy = self.dt_time.strftime('%j')
 	else:
 	    self.long_date = '' # No Acquisition date information available
-    def clip_raster(self, clip_rast, band_num, trans='NN'):
+    def clip_raster(self, clip_rast, band_num, trans='NN', pix_size=None):
 	''' Reproject, and clip a raster using a template raster: '''
 	band = RasterClass(self.bands[band_num][0], gdal.GA_ReadOnly)
-	self.pixelSize = band.pixelSize
+	if pix_size is not None:
+	    self.pixelSize = pix_size
+	else:
+	    self.pixelSize = band.pixelSize
 	clipRaster = clipClass(clip_rast, band.pixelSize, num_bands=1, rast_type=band.dataType)
-	res = gdal.ReprojectImage( band.raster, clipRaster.dest, band.projection, \
-	                                 clipRaster.projection, transforms[trans] )
+	clip = clipRaster.clip_raster(band.raster, trans=trans)
 	band.close()
-	if (res != 0):
+	if not clip:
+	    ''' There was an error clipping/reprojecting the raster:'''
 	    m = re.search(r'(?<=band)\d+', self.bands[band_num][1], flags=re.IGNORECASE)
 	    if m:
 		band = m.group()
 	    else:
 		band = self.bands[band_num][1].split(' ')[1]
 	    print("Error reprojecting Band %s" % band)
-	    sys.exit(2)
+	    return None
 	else:
-	    return clipRaster.dest.ReadAsArray()
-    def clip_and_rescale_raster(self, clip_rast, band_num, pix_size, trans='NN'):
-	''' Reproject, and clip a raster using a template raster: '''
-	band = RasterClass(self.bands[band_num][0], gdal.GA_ReadOnly)
-	self.pixelSize = pix_size
-	clipRaster = clipClass(clip_rast, pix_size, num_bands=1, rast_type=band.dataType)
-	res = gdal.ReprojectImage( band.raster, clipRaster.dest, band.projection, \
-	                                 clipRaster.projection, transforms[trans] )
-	band.close()
-	if (res != 0):
-	    m = re.search(r'(?<=band)\d+', self.bands[band_num][1], flags=re.IGNORECASE)
-	    if m:
-		band = m.group()
-	    else:
-		band = self.bands[band_num][1].split(' ')[1]
-	    print("Error reprojecting Band %s" % band)
-	    sys.exit(2)
-	else:
-	    return clipRaster.dest.ReadAsArray()
-	band = RasterClass(self.bands[band_num][0], gdal.GA_ReadOnly)
-	ba = band.read_band(1)
-	band.close()
-	return ba
+	    return clip.get_clipped_raster()
+    '''Deprecated: def clip_and_rescale_raster(self, clip_rast, band_num, pix_size, trans='NN'):'''
     def print_metadata(self):
 	for k, v in self.metadata.iteritems(): print("%s:\t%s" % (k, v))
     def print_band_names(self):
@@ -599,7 +667,7 @@ class clipClass:
 
 	''' Calculate the new geotransform '''
 	self.geotransform = ( self.ulX, self.npx, clipRaster.geotransform[2], \
-	                            self.ulY, clipRaster.geotransform[4], -self.npx )
+	                      self.ulY, clipRaster.geotransform[4], -self.npx )
 	self.projection = clipRaster.projection
 	''' Create a raster in memory with new pixel-size & the boundary of the clip raster: '''
 	self.dest = memory.Create('', self.nCols, self.nRows, num_bands, gdalDataTypes[rast_type])
@@ -610,13 +678,23 @@ class clipClass:
     def clip_raster(self, rast_to_clip, trans='NN'):
 	''' Reproject, and clip a raster using a template raster: '''
 	#clipRaster = clipClass(clip_rast, self.pixelSize, num_bands=self.numBands, rast_type=self.dataType)
-	res = gdal.ReprojectImage( rast_to_clip.raster, self.dest, rast_to_clip.projection, \
-	                                 self.projection, transforms[trans] )
-	if (res != 0):
-	    print("Error reprojecting raster %s" % rast_to_clip.rasterPath)
-	    sys.exit(2)
+	if isinstance(rast_to_clip, str) and os.path.isfile(rast_to_clip):
+	    rast_to_clip = RasterClass(rast_to_clip)
+	if isinstance(rast_to_clip, RasterClass):
+	    inRast = rast_to_clip
+	    rastPath = inRast.rasterPath
+	    res = gdal.ReprojectImage( inRast.raster, self.dest, inRast.projection, \
+		                             self.projection, transforms[trans] )
+	    if res != 0:
+		print("Error clipping/reprojecting raster %s" % rastPathh)
+		return False
+	    else:
+		return True
 	else:
-	    return self.dest
+	    print("Warning: ", rast_to_clip, " is an invalid raster/raster file name and can not be clipped")
+	    return False
+    def get_clipped_raster(self):
+	return self.dest.ReadAsArray()
 
 class rasterizeClass:
     def __init__(self, to_raster_class):
@@ -730,3 +808,19 @@ def fill_all_bands(source_file, fill_files, output_raster, out_type = 'GTiff',
                           clipRaster.projection, output_raster, no_data = no_data, \
                           rasterFormat = out_type)
     return status
+
+'''--------------------------------------------------------------------------
+      Create speicial projections:
+   --------------------------------------------------------------------------'''
+'''------------------MODIS sinusoidal projection (6974):---------------------'''
+modis_srs = osr.SpatialReference()
+modis_srs.SetWellKnownGeogCS( "WGS84" )
+modis_srs.SetProjCS( "MODIS Sinusoidal" )
+modis_srs.SetWellKnownGeogCS( "EPSG:4326" )
+modis_srs.SetProjection("Sinusoidal")
+modis_srs.SetProjParm("false_easting", 0.0)
+modis_srs.SetProjParm("false_northing", 0.0)
+modis_srs.SetProjParm("central_meridian", 0.0)
+modis_srs.SetProjParm("Semi_Major", 6371007.181)
+modis_srs.SetProjParm("Semi_Minor", 6371007.181)
+modis_srs.SetLinearUnits("Meter",1.0)

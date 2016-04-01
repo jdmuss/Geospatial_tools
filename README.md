@@ -14,10 +14,10 @@ The main files are:
 3) Raster_tools.py: tools to mask rasters, perform stretches, and the beginning of some machine-learning
       classification techniques (this is a work in progress and requires some re-orginization)
 4) veg_indices.py: a class to calculate some useful VIs
-5) Summarize_rescale_Raster.py: summarize and rescale a raster (merge into Raster_tools)
-6) shapeFileClass.py: Classes and functions to open and process shapefiles
-7) convertDNtoTOAReflectance.py: Class to convert raw landsat DN values to top of atmosphere reflectance values
-8) ASCII_Grid_class.py: Class to read and convert between ESRI ASCII Grids & GeoTiffs
+5) shapeFileClass.py: Classes and functions to open and process shapefiles
+6) convertDNtoTOAReflectance.py: Class to convert raw landsat DN values to top of atmosphere reflectance values
+7) ASCII_Grid_class.py: Class to read and convert between ESRI ASCII Grids & GeoTiffs
 
+Summarize_rescale_Raster.py has been deprecated
 
-# Updated 3-28-2015
+# Updated 4-01-2015
