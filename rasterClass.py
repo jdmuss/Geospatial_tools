@@ -66,8 +66,10 @@ Updated:       12-20-2012   Added a clip method so that a raster can be clipped
 			         and added 'get_clipped_raster' method to return
 				 the clipped raster as a numpy structure. Now allow a file
 				 name to be passed for the raster that will be clipped.
-                4-07-2016   Merged this version with one that storesreferences
-				 dicts, etc. in gdal_defs.py
+                4-07-2016   Merged this version with one that stores references
+				 dicts, etc. in gdal_defs.py 
+                4-21-2016   Modified clipClass to be more generic. NOTE: this is
+				 still a work in progress
 
 ToDo:
       1) replace calls to 'read_and_clip_raster' & 'clip_and_rescale_raster' in
@@ -77,7 +79,7 @@ ToDo:
       3) Look into 'LoadRaster' class & aggFunc (dict is located in gdal_defs)
 """
 from __future__ import print_function
-import sys
+import os, sys
 import datetime, re
 import numpy as np
 from PIL import Image, ImageDraw
@@ -578,42 +580,48 @@ class ReprojectClass:
 	    return self.dest
 
 class clipClass:
-    def __init__(self, clip_raster_name, nom_pix_sz, num_bands=1, rast_type='Byte'):
-	memory = gdal.GetDriverByName( 'MEM' )
+    def __init__(self, clip_raster_name, nom_pix_sz):
 	clipRaster = RasterClass(clip_raster_name, gdal.GA_ReadOnly)
-	self.ulX, self.ulY, ulZ = clipRaster.ulX, clipRaster.ulY, 0
-	lrX, lrY, lrZ = clipRaster.lrX, clipRaster.lrY, 0
-
-	if (osr.SpatialReference(clipRaster.projection).GetAttrValue("UNIT") == 'degree'):
-	    spheroid_radius = float(osr.SpatialReference(clipRaster.projection).GetAttrValue("SPHEROID",1))
-	    self.npx = nom_pix_sz/(np.radians(1)*spheroid_radius)
-	else:
-	    self.npx = nom_pix_sz
-
-	self.nCols = int(np.ceil(np.round((lrX-self.ulX)/self.npx, 1)))
-	self.nRows = int(np.ceil(np.round((self.ulY-lrY)/self.npx, 1)))
-	self.lrX = self.ulX + self.npx*self.nCols
-	self.lrY = self.ulY - self.npx*self.nRows
-
-	''' Calculate the new geotransform '''
-	self.geotransform = ( self.ulX, self.npx, clipRaster.geotransform[2], \
-	                      self.ulY, clipRaster.geotransform[4], -self.npx )
+	self.clip_ulX, self.clip_ulY, ulZ = clipRaster.ulX, clipRaster.ulY, 0
+	self.clip_lrX, self.clip_lrY, lrZ = clipRaster.lrX, clipRaster.lrY, 0
+	self.clip_npx = nom_pix_sz
+	self.clip_SRS = osr.SpatialReference(clipRaster.projection)
+	self.clip_geotransform = clipRaster.geotransform
 	self.projection = clipRaster.projection
-	''' Create a raster in memory with new pixel-size & the boundary of the clip raster: '''
-	self.dest = memory.Create('', self.nCols, self.nRows, num_bands, gdalDataTypes[rast_type])
-	''' Set the geotransform '''
-	self.dest.SetGeoTransform(self.geotransform)
-	self.dest.SetProjection(self.projection)
 	clipRaster = None
     def clip_raster(self, rast_to_clip, trans='NN'):
 	''' Reproject, and clip a raster using a template raster: '''
-	#clipRaster = clipClass(clip_rast, self.pixelSize, num_bands=self.numBands, rast_type=self.dataType)
+	memory = gdal.GetDriverByName( 'MEM' )
 	if isinstance(rast_to_clip, str) and os.path.isfile(rast_to_clip):
 	    rast_to_clip = RasterClass(rast_to_clip)
 	if isinstance(rast_to_clip, RasterClass):
-	    inRast = rast_to_clip
-	    rastPath = inRast.rasterPath
-	    res = gdal.ReprojectImage( inRast.raster, self.dest, inRast.projection, \
+	    to_projection = rast_to_clip.projection
+	    ''' Set the nominal pixel size if necessary & create the new geotransform:'''
+	    if self.clip_SRS.GetAttrValue("UNIT") != osr.SpatialReference(to_projection).GetAttrValue("UNIT"):
+		'''ToDo: fix this to go from meter to degree'''
+		spheroid_radius = float(self.clip_SRS.GetAttrValue("SPHEROID",1))
+		npx = self.clip_npx/(np.radians(1)*spheroid_radius)
+	    else:
+		npx = self.clip_npx
+    
+	    nCols = int(np.ceil(np.round((self.clip_lrX-self.clip_ulX)/npx, 1)))
+	    nRows = int(np.ceil(np.round((self.clip_ulY-self.clip_lrY)/npx, 1)))
+	    lrX = self.clip_ulX + npx*nCols
+	    lrY = self.clip_ulY - npx*nRows
+    
+	    ''' Calculate the new geotransform '''
+	    self.geotransform = ( self.clip_ulX, npx, self.clip_geotransform[2], \
+		                  self.clip_ulY, self.clip_geotransform[4], -npx )
+
+	    ''' Create a raster in memory with new pixel-size & the boundary
+	        of the clip raster: '''
+	    self.dest = memory.Create('', nCols, nRows, rast_to_clip.numBands, gdalDataTypes[rast_to_clip.dataType])
+	    ''' Set the geotransform & projection: '''
+	    self.dest.SetGeoTransform(self.geotransform)
+	    self.dest.SetProjection(self.projection)
+
+	    rastPath = rast_to_clip.rasterPath
+	    res = gdal.ReprojectImage( rast_to_clip.raster, self.dest, to_projection, \
 		                             self.projection, transforms[trans] )
 	    if res != 0:
 		print("Error clipping/reprojecting raster %s" % rastPathh)
